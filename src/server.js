@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     credentials: true
   }
@@ -19,7 +19,19 @@ const io = socketIo(server, {
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function(origin, callback) {
+    const allowed = [
+      'https://meudeliverydemilhoes-ctrl.github.io',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      process.env.FRONTEND_URL
+    ].filter(Boolean);
+    if (!origin || allowed.some(a => origin.startsWith(a))) {
+      callback(null, true);
+    } else {
+      callback(null, true);
+    }
+  },
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -91,7 +103,7 @@ app.set('io', io);
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
-    app: 'Delivery Milionário Pro',
+    app: 'Delivery MilionÃ¡rio Pro',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -100,7 +112,7 @@ app.get('/health', (req, res) => {
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
-    app: 'Delivery Milionário Pro - API',
+    app: 'Delivery MilionÃ¡rio Pro - API',
     version: '1.0.0',
     docs: '/api/v1',
     health: '/health'
