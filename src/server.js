@@ -133,11 +133,41 @@ app.use((req, res) => {
   });
 });
 
-// Start server
+// Run migrations and start server
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+
+async function startServer() {
+  try {
+    // Auto-run migrations on startup
+    const knex = require('../knexfile');
+    const db = require('knex')(knex[process.env.NODE_ENV || 'development'] || knex.production || knex);
+
+    console.log('[DB] Running migrations...');
+    await db.migrate.latest();
+    console.log('[DB] Migrations completed successfully');
+
+    // Run seeds if tables are empty
+    try {
+      const stages = await db('funnel_stages').count('id as count').first();
+      if (!stages || parseInt(stages.count) === 0) {
+        console.log('[DB] Running seeds...');
+        await db.seed.run();
+        console.log('[DB] Seeds completed');
+      }
+    } catch (seedErr) {
+      console.log('[DB] Seeds skipped:', seedErr.message);
+    }
+  } catch (err) {
+    console.error('[DB] Migration error:', err.message);
+    console.log('[DB] Server will start anyway...');
+  }
+
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+}
+
+startServer();
 
 module.exports = { app, server, io };
