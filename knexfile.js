@@ -1,6 +1,4 @@
-import dotenv from 'dotenv';
-
-dotenv.config();
+require('dotenv').config();
 
 const baseConfig = {
   client: 'pg',
@@ -12,12 +10,10 @@ const baseConfig = {
     database: 'deliverymilionario'
   },
   migrations: {
-    directory: './src/database/migrations',
-    extension: 'ts'
+    directory: './migrations'
   },
   seeds: {
-    directory: './src/database/seeds',
-    extension: 'ts'
+    directory: './seeds'
   },
   pool: {
     min: 2,
@@ -25,7 +21,7 @@ const baseConfig = {
   }
 };
 
-const config = {
+module.exports = {
   development: {
     ...baseConfig,
     debug: false
@@ -33,19 +29,11 @@ const config = {
   staging: {
     ...baseConfig,
     debug: false,
-    pool: {
-      min: 5,
-      max: 20
-    }
+    pool: { min: 5, max: 20 }
   },
   production: {
     ...baseConfig,
     debug: false,
-    pool: {
-      min: 10,
-      max: 30
-    }
+    pool: { min: 5, max: 20 }
   }
 };
-
-export default config;

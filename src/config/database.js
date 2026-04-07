@@ -5,37 +5,27 @@ const knex = require('knex');
  * Uses DATABASE_URL environment variable for connection string
  */
 const db = knex({
-  client: process.env.DB_CLIENT || 'postgresql',
-  connection: {
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-    ...(process.env.DB_CLIENT === 'sqlite' && { filename: process.env.DB_FILENAME || ':memory:' })
-  },
+  client: 'pg',
+  connection: process.env.DATABASE_URL,
   pool: {
     min: 2,
-    max: 10,
-    acquireTimeoutMillis: 30000,
-    idleTimeoutMillis: 30000,
-    reapIntervalMillis: 1000,
-    createTimeoutMillis: 30000
+    max: 10
   },
   migrations: {
-    directory: './migrations',
-    extension: 'js'
+    directory: './migrations'
   },
   seeds: {
-    directory: './seeds',
-    extension: 'js'
+    directory: './seeds'
   }
 });
 
 // Test database connection
 db.raw('SELECT 1')
   .then(() => {
-    console.log('Database connection successful');
+    console.log('[DB] Database connection successful');
   })
   .catch((err) => {
-    console.error('Database connection failed:', err);
+    console.error('[DB] Database connection failed:', err.message);
   });
 
 module.exports = db;
