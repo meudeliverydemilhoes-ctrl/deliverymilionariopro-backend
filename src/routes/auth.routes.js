@@ -1,37 +1,41 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
+const db = require('../config/database');
 const { verifyToken } = require('../middleware/auth');
 
 /**
  * POST /api/v1/auth/register
- * Register a new user account
  */
-router.post('/register', (req, res) => {
+router.post('/register', async (req, res) => {
   try {
-    const { email, password, firstName, lastName, companyName } = req.body;
+    const { name, email, password, role } = req.body;
 
-    // Controller logic:
-    // 1. Validate required fields
-    // 2. Check if email already exists
-    // 3. Hash password using bcrypt
-    // 4. Create user in database
-    // 5. Generate JWT token
-    // 6. Return user and token
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Nome, email e senha são obrigatórios' });
+    }
 
-    const user = {
-      id: 'user_' + Date.now(),
+    // Check if email exists
+    const existing = await db('users').where({ email }).first();
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'Email já cadastrado' });
+    }
+
+    // Hash password
+    const password_hash = await bcrypt.hash(password, 10);
+
+    // Create user
+    const [user] = await db('users').insert({
+      name,
       email,
-      firstName,
-      lastName,
-      companyName,
-      role: 'user',
-      createdAt: new Date().toISOString()
-    };
+      password_hash,
+      role: role || 'admin'
+    }).returning(['id', 'name', 'email', 'role', 'created_at']);
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET || 'secret',
       { expiresIn: '7d' }
     );
 
@@ -39,48 +43,38 @@ router.post('/register', (req, res) => {
       success: true,
       statusCode: 201,
       message: 'User registered successfully',
-      data: {
-        user,
-        token
-      }
+      data: { user, token }
     });
   } catch (error) {
-    res.status(400).json({
-      success: false,
-      statusCode: 400,
-      message: error.message
-    });
+    console.error('[Auth] Register error:', error.message);
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 
 /**
  * POST /api/v1/auth/login
- * Authenticate user and return JWT token
  */
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Controller logic:
-    // 1. Validate email and password provided
-    // 2. Find user by email
-    // 3. Compare password with hashed password in database
-    // 4. Generate JWT token
-    // 5. Return user and token
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: 'Email e senha são obrigatórios' });
+    }
 
-    const user = {
-      id: 'user_123',
-      email: email || 'user@example.com',
-      firstName: 'John',
-      lastName: 'Doe',
-      companyName: 'ABC Corp',
-      role: 'supervisor',
-      createdAt: '2024-01-15T10:30:00Z'
-    };
+    const user = await db('users').where({ email }).first();
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Credenciais inválidas' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ success: false, message: 'Credenciais inválidas' });
+    }
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET || 'secret',
       { expiresIn: '7d' }
     );
 
@@ -89,93 +83,69 @@ router.post('/login', (req, res) => {
       statusCode: 200,
       message: 'Login successful',
       data: {
-        user,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar_url: user.avatar_url,
+          created_at: user.created_at
+        },
         token
       }
     });
   } catch (error) {
-    res.status(401).json({
-      success: false,
-      statusCode: 401,
-      message: 'Invalid credentials'
-    });
+    console.error('[Auth] Login error:', error.message);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 /**
  * GET /api/v1/auth/me
- * Get current authenticated user profile
  */
-router.get('/me', verifyToken, (req, res) => {
+router.get('/me', verifyToken, async (req, res) => {
   try {
-    // Controller logic:
-    // 1. Get user ID from req.user (set by verifyToken middleware)
-    // 2. Fetch user details from database
-    // 3. Return user profile
-
-    const user = {
-      id: req.user.id,
-      email: req.user.email,
-      firstName: 'John',
-      lastName: 'Doe',
-      companyName: 'ABC Corp',
-      role: req.user.role,
-      avatar: 'https://ui-avatars.com/api/?name=John+Doe',
-      createdAt: '2024-01-15T10:30:00Z',
-      lastLogin: new Date().toISOString()
-    };
+    const user = await db('users').where({ id: req.user.id }).first();
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuário não encontrado' });
+    }
 
     res.status(200).json({
       success: true,
-      statusCode: 200,
-      data: user
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar_url: user.avatar_url,
+        phone: user.phone,
+        created_at: user.created_at
+      }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      statusCode: 500,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 /**
  * PUT /api/v1/auth/profile
- * Update user profile
  */
-router.put('/profile', verifyToken, (req, res) => {
+router.put('/profile', verifyToken, async (req, res) => {
   try {
-    const { firstName, lastName, avatar, phone } = req.body;
+    const { name, avatar_url, phone } = req.body;
 
-    // Controller logic:
-    // 1. Validate input fields
-    // 2. Update user in database
-    // 3. Return updated user
-
-    const updatedUser = {
-      id: req.user.id,
-      email: req.user.email,
-      firstName: firstName || 'John',
-      lastName: lastName || 'Doe',
-      companyName: 'ABC Corp',
-      phone: phone || '+1-555-0123',
-      avatar: avatar || 'https://ui-avatars.com/api/?name=John+Doe',
-      role: req.user.role,
-      updatedAt: new Date().toISOString()
-    };
+    const [updated] = await db('users')
+      .where({ id: req.user.id })
+      .update({ name, avatar_url, phone, updated_at: new Date() })
+      .returning(['id', 'name', 'email', 'role', 'avatar_url', 'phone', 'updated_at']);
 
     res.status(200).json({
       success: true,
-      statusCode: 200,
       message: 'Profile updated successfully',
-      data: updatedUser
+      data: updated
     });
   } catch (error) {
-    res.status(400).json({
-      success: false,
-      statusCode: 400,
-      message: error.message
-    });
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 

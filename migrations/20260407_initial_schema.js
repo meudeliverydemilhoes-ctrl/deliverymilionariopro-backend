@@ -20,8 +20,8 @@ exports.up = async function(knex) {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
     table.uuid('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE');
     table.string('instance_name').notNullable();
-    table.string('instance_id').notNullable();
-    table.string('phone_number').notNullable();
+    table.string('instance_id');
+    table.string('phone_number');
     table.enum('status', ['connected', 'disconnected', 'connecting']).notNullable().defaultTo('disconnected');
     table.string('api_url');
     table.text('api_key');
