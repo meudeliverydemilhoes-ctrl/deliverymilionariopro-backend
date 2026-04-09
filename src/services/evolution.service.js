@@ -1,11 +1,6 @@
 const axios = require('axios');
 const db = require('../config/database');
 
-/**
- * WAHA (WhatsApp HTTP API) Service
- * Substitui Evolution API - compatível com WAHA hospedado no Railway
- * Documentação: https://waha.devlike.pro/docs/overview/introduction/
- */
 class EvolutionService {
   constructor() {
     this.apiUrl = process.env.EVOLUTION_API_URL || 'http://localhost:3000';
@@ -47,10 +42,8 @@ class EvolutionService {
 
       console.log(`[WAHA] Sessão "${name}" criada`);
 
-      // Aguardar sessão ficar pronta para QR
       await new Promise(r => setTimeout(r, 3000));
 
-      // Buscar QR code
       try {
         const qrResponse = await this.client.get(`/api/${name}/auth/qr`, {
           responseType: 'arraybuffer'
@@ -63,9 +56,7 @@ class EvolutionService {
           instance: { instanceName: name, status: 'created' }
         };
       } catch (qrErr) {
-        return {
-          instance: { instanceName: name, status: 'created' }
-        };
+        return { instance: { instanceName: name, status: 'created' } };
       }
     } catch (error) {
       console.error('[WAHA] Erro ao criar sessão:', error.response?.data || error.message);
@@ -77,7 +68,6 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
 
-      // Verificar status da sessão primeiro
       let sessionStatus;
       try {
         const statusResp = await this.client.get(`/api/sessions/${name}`);
@@ -86,9 +76,7 @@ class EvolutionService {
         sessionStatus = null;
       }
 
-      // Se sessão não existe ou falhou, iniciar nova
       if (!sessionStatus || sessionStatus === 'FAILED' || sessionStatus === 'STOPPED') {
-        // Tentar parar primeiro
         try { await this.client.post('/api/sessions/stop', { name }); } catch (e) {}
         await new Promise(r => setTimeout(r, 1000));
 
@@ -102,11 +90,9 @@ class EvolutionService {
             }] : []
           }
         });
-
         await new Promise(r => setTimeout(r, 4000));
       }
 
-      // Buscar QR como imagem PNG e converter para base64
       const qrResponse = await this.client.get(`/api/${name}/auth/qr`, {
         responseType: 'arraybuffer'
       });
@@ -124,9 +110,8 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/sessions/${name}`);
-
       const status = response.data?.status;
-      // Mapear status WAHA para formato esperado pelo routes
+
       const stateMap = {
         'WORKING': 'open',
         'SCAN_QR_CODE': 'connecting',
@@ -158,8 +143,8 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/sessions/${name}`);
-
       const me = response.data?.me;
+
       return [{
         instance: {
           instanceName: name,
@@ -236,9 +221,7 @@ class EvolutionService {
       });
 
       console.log(`[WAHA] Mensagem enviada para ${number}`);
-
       await this._saveOutgoingMessage(number, message, 'text', response.data);
-
       return response.data;
     } catch (error) {
       console.error('[WAHA] Erro ao enviar mensagem:', error.response?.data || error.message);
@@ -255,10 +238,7 @@ class EvolutionService {
       const response = await this.client.post('/api/sendFile', {
         session: name,
         chatId: chatId,
-        file: {
-          url: mediaUrl,
-          caption: caption
-        }
+        file: { url: mediaUrl, caption: caption }
       });
 
       console.log(`[WAHA] Mídia enviada para ${number}`);
@@ -294,9 +274,7 @@ class EvolutionService {
   async getContacts(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get('/api/contacts', {
-        params: { session: name }
-      });
+      const response = await this.client.get('/api/contacts', { params: { session: name } });
       return response.data;
     } catch (error) {
       return [];
@@ -307,7 +285,6 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/${name}/groups`);
-
       return (response.data || []).map(g => ({
         id: g.id,
         subject: g.subject || g.name,
@@ -323,9 +300,7 @@ class EvolutionService {
   async getGroupInfo(groupId, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/api/${name}/groups`, {
-        params: { groupId }
-      });
+      const response = await this.client.get(`/api/${name}/groups`, { params: { groupId } });
       return response.data;
     } catch (error) {
       throw new Error(`Falha ao buscar grupo: ${error.response?.data?.message || error.message}`);
@@ -352,11 +327,9 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
-
       const response = await this.client.get('/api/contacts/check-exists', {
         params: { phone: number, session: name }
       });
-
       return response.data;
     } catch (error) {
       throw new Error(`Falha ao verificar número: ${error.response?.data?.message || error.message}`);
@@ -405,10 +378,6 @@ class EvolutionService {
   // HELPERS INTERNOS
   // ============================================
 
-  /**
-   * Busca ou cria o registro da instância WhatsApp no banco
-   * Garante que sempre temos um instance_id válido para conversas
-   */
   async _getOrCreateInstance() {
     let instance = await db('whatsapp_instances')
       .where('instance_name', this.instanceName)
@@ -416,12 +385,8 @@ class EvolutionService {
 
     if (!instance) {
       console.log(`[WAHA] Criando registro de instância "${this.instanceName}" no banco`);
-
-      // Buscar primeiro usuário admin para associar à instância
       let user = await db('users').where('role', 'admin').first();
-      if (!user) {
-        user = await db('users').first();
-      }
+      if (!user) { user = await db('users').first(); }
 
       [instance] = await db('whatsapp_instances').insert({
         user_id: user ? user.id : null,
@@ -454,7 +419,6 @@ class EvolutionService {
           }).returning('*');
         }
 
-        // Buscar ou criar instância para obter instance_id
         const instance = await this._getOrCreateInstance();
 
         [conversation] = await db('conversations').insert({
@@ -482,7 +446,6 @@ class EvolutionService {
         last_message_at: new Date(),
         updated_at: new Date()
       });
-
     } catch (error) {
       console.error('[WAHA] Erro ao salvar mensagem:', error.message);
     }
@@ -494,65 +457,79 @@ class EvolutionService {
       if (!payload) return null;
 
       const fromMe = payload.fromMe || payload.key?.fromMe;
-      if (fromMe) return null;
 
       let phone, content, pushName, isGroup;
 
       if (this.platform === 'waha') {
-        phone = (payload.from || payload.chatId || '').replace('@c.us', '').replace('@g.us', '');
+        if (fromMe) {
+          // For sent messages, the recipient is in 'to'
+          phone = (payload.to || payload.chatId || '').replace('@c.us', '').replace('@g.us', '');
+        } else {
+          phone = (payload.from || payload.chatId || '').replace('@c.us', '').replace('@g.us', '');
+        }
         content = payload.body || payload.text || payload.caption || '[Mídia recebida]';
-        pushName = payload.notifyName || payload._data?.notifyName || 'Desconhecido';
-        isGroup = (payload.from || '').includes('@g.us');
+        pushName = payload.notifyName || payload._data?.notifyName || null;
+        isGroup = (payload.from || payload.to || '').includes('@g.us');
       } else {
         const messageData = payload?.message;
         const key = payload?.key;
         if (!key || !messageData) return null;
-
         phone = key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
         isGroup = key.remoteJid.includes('@g.us');
-        content = messageData.conversation ||
-                  messageData.extendedTextMessage?.text ||
-                  messageData.imageMessage?.caption ||
-                  '[Mídia recebida]';
+        content = messageData.conversation || messageData.extendedTextMessage?.text || messageData.imageMessage?.caption || '[Mídia recebida]';
         pushName = payload.pushName || 'Desconhecido';
       }
 
       if (!phone) return null;
 
       let lead = await db('leads').where('phone', phone).first();
+
       if (!lead) {
         [lead] = await db('leads').insert({
-          name: pushName,
+          name: pushName || 'Desconhecido',
           phone,
           stage: 'lead',
           priority: 'normal',
           score: 10,
           source: isGroup ? 'whatsapp_group' : 'whatsapp_direct'
         }).returning('*');
-        console.log(`[WAHA] Novo lead criado: ${pushName} (${phone})`);
+        console.log(`[WAHA] Novo lead criado: ${pushName || 'Desconhecido'} (${phone})`);
+      }
+
+      // Update lead name if we have a real pushName and current name is generic
+      if (lead && pushName && pushName !== 'Desconhecido' &&
+          (lead.name === 'Desconhecido' || lead.name === 'Novo Contato')) {
+        await db('leads').where('id', lead.id).update({
+          name: pushName,
+          updated_at: new Date()
+        });
+        lead.name = pushName;
+        console.log(`[WAHA] Lead atualizado com nome: ${pushName} (${phone})`);
       }
 
       let conversation = await db('conversations').where('lead_id', lead.id).first();
-      if (!conversation) {
-        // Buscar ou criar instância para obter instance_id
-        const instance = await this._getOrCreateInstance();
 
+      if (!conversation) {
+        const instance = await this._getOrCreateInstance();
         [conversation] = await db('conversations').insert({
           lead_id: lead.id,
           instance_id: instance.id,
           status: 'open',
           last_message: content,
           last_message_at: new Date(),
-          unread_count: 1
+          unread_count: fromMe ? 0 : 1
         }).returning('*');
       } else {
-        await db('conversations').where('id', conversation.id).update({
+        const updateData = {
           last_message: content,
           last_message_at: new Date(),
-          unread_count: db.raw('unread_count + 1'),
           status: 'open',
           updated_at: new Date()
-        });
+        };
+        if (!fromMe) {
+          updateData.unread_count = db.raw('unread_count + 1');
+        }
+        await db('conversations').where('id', conversation.id).update(updateData);
       }
 
       let mediaType = 'text';
@@ -565,16 +542,19 @@ class EvolutionService {
 
       const [savedMessage] = await db('messages').insert({
         conversation_id: conversation.id,
-        from_type: 'lead',
-        from_id: phone,
+        from_type: fromMe ? 'attendant' : 'lead',
+        from_id: fromMe ? 'system' : phone,
         content,
         media_type: mediaType,
-        status: 'delivered',
+        status: fromMe ? 'sent' : 'delivered',
         whatsapp_message_id: payload.id || payload.key?.id || null,
         created_at: new Date()
       }).returning('*');
 
-      return { lead, conversation, message: savedMessage, content, phone, pushName, isGroup };
+      return {
+        lead, conversation, message: savedMessage,
+        content, phone, pushName, isGroup
+      };
     } catch (error) {
       console.error('[WAHA] Erro ao processar mensagem:', error.message);
       throw error;
@@ -582,6 +562,5 @@ class EvolutionService {
   }
 }
 
-// Singleton
 const evolutionService = new EvolutionService();
 module.exports = evolutionService;
