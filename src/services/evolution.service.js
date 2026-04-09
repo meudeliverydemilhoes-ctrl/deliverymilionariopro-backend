@@ -410,7 +410,15 @@ class EvolutionService {
 
     if (!instance) {
       console.log(`[WAHA] Criando registro de instância "${this.instanceName}" no banco`);
+
+      // Buscar primeiro usuário admin para associar à instância
+      let user = await db('users').where('role', 'admin').first();
+      if (!user) {
+        user = await db('users').first();
+      }
+
       [instance] = await db('whatsapp_instances').insert({
+        user_id: user ? user.id : null,
         instance_name: this.instanceName,
         status: 'connected',
         api_url: this.apiUrl,
