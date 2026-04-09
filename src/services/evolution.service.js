@@ -2,129 +2,222 @@ const axios = require('axios');
 const db = require('../config/database');
 
 /**
- * Evolution API Service v2.3.7
- * Integração real com a Evolution API hospedada no Railway
- * Documentação: https://doc.evolution-api.com
+ * WAHA (WhatsApp HTTP API) Service
+ * Substitui Evolution API - compatível com WAHA hospedado no Railway
+ * Documentação: https://waha.devlike.pro/docs/overview/introduction/
  */
 class EvolutionService {
   constructor() {
-    this.apiUrl = process.env.EVOLUTION_API_URL || 'http://localhost:8080';
+    this.apiUrl = process.env.EVOLUTION_API_URL || 'http://localhost:3000';
     this.apiKey = process.env.EVOLUTION_API_KEY || '';
-    this.instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'meudelivery';
+    this.instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'default';
+    this.platform = process.env.WHATSAPP_PLATFORM || 'waha';
 
     this.client = axios.create({
       baseURL: this.apiUrl,
       headers: {
-        'apikey': this.apiKey,
+        'X-Api-Key': this.apiKey,
         'Content-Type': 'application/json'
       },
       timeout: 30000
     });
 
-    // Log de inicialização
-    console.log(`[EvolutionAPI] Conectando em: ${this.apiUrl}`);
-    console.log(`[EvolutionAPI] Instância: ${this.instanceName}`);
+    console.log(`[WAHA] Conectando em: ${this.apiUrl}`);
+    console.log(`[WAHA] Sessão: ${this.instanceName}`);
   }
 
   // ============================================
   // INSTÂNCIA / CONEXÃO
   // ============================================
 
-  /**
-   * Criar nova instância WhatsApp
-   * POST /instance/create
-   */
   async createInstance(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.post('/instance/create', {
-        instanceName: name,
-        qrcode: true,
-        integration: 'WHATSAPP-BAILEYS'
+      const webhookUrl = process.env.WEBHOOK_URL || '';
+
+      const response = await this.client.post('/api/sessions/start', {
+        name: name,
+        config: {
+          webhooks: webhookUrl ? [{
+            url: webhookUrl,
+            events: ['message', 'session.status']
+          }] : []
+        }
       });
-      console.log(`[EvolutionAPI] Instância "${name}" criada`);
-      return response.data;
+
+      console.log(`[WAHA] Sessão "${name}" criada`);
+
+      // Aguardar sessão ficar pronta para QR
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Buscar QR code
+      try {
+        const qrResponse = await this.client.get(`/api/${name}/auth/qr`, {
+          responseType: 'arraybuffer'
+        });
+        const base64 = Buffer.from(qrResponse.data).toString('base64');
+        const qrBase64 = `data:image/png;base64,${base64}`;
+
+        return {
+          qrcode: { base64: qrBase64 },
+          instance: { instanceName: name, status: 'created' }
+        };
+      } catch (qrErr) {
+        return { instance: { instanceName: name, status: 'created' } };
+      }
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao criar instância:', error.response?.data || error.message);
-      throw new Error(`Falha ao criar instância: ${error.response?.data?.message || error.message}`);
+      console.error('[WAHA] Erro ao criar sessão:', error.response?.data || error.message);
+      throw new Error(`Falha ao criar sessão: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Obter QR Code para conectar WhatsApp
-   * GET /instance/connect/{instanceName}
-   */
   async getQRCode(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/instance/connect/${name}`);
-      return response.data;
+
+      // Verificar status da sessão primeiro
+      let sessionStatus;
+      try {
+        const statusResp = await this.client.get(`/api/sessions/${name}`);
+        sessionStatus = statusResp.data?.status;
+      } catch (e) {
+        sessionStatus = null;
+      }
+
+      // Se sessão não existe ou falhou, iniciar nova
+      if (!sessionStatus || sessionStatus === 'FAILED' || sessionStatus === 'STOPPED') {
+        // Tentar parar primeiro
+        try {
+          await this.client.post('/api/sessions/stop', { name });
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 1000));
+
+        const webhookUrl = process.env.WEBHOOK_URL || '';
+        await this.client.post('/api/sessions/start', {
+          name: name,
+          config: {
+            webhooks: webhookUrl ? [{
+              url: webhookUrl,
+              events: ['message', 'session.status']
+            }] : []
+          }
+        });
+        await new Promise(r => setTimeout(r, 4000));
+      }
+
+      // Buscar QR como imagem PNG e converter para base64
+      const qrResponse = await this.client.get(`/api/${name}/auth/qr`, {
+        responseType: 'arraybuffer'
+      });
+
+      const base64 = Buffer.from(qrResponse.data).toString('base64');
+      const qrBase64 = `data:image/png;base64,${base64}`;
+
+      return {
+        base64: qrBase64,
+        code: qrBase64
+      };
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao obter QR Code:', error.response?.data || error.message);
+      console.error('[WAHA] Erro ao obter QR Code:', error.response?.data || error.message);
       throw new Error(`Falha ao obter QR Code: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Verificar status da conexão
-   * GET /instance/connectionState/{instanceName}
-   */
   async getConnectionState(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/instance/connectionState/${name}`);
-      return response.data;
+      const response = await this.client.get(`/api/sessions/${name}`);
+      const status = response.data?.status;
+
+      // Mapear status WAHA para formato esperado pelo routes
+      const stateMap = {
+        'WORKING': 'open',
+        'SCAN_QR_CODE': 'connecting',
+        'STARTING': 'connecting',
+        'FAILED': 'close',
+        'STOPPED': 'close'
+      };
+
+      return {
+        instance: {
+          instanceName: name,
+          state: stateMap[status] || 'close',
+          status: status
+        }
+      };
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao verificar status:', error.response?.data || error.message);
-      throw new Error(`Falha ao verificar status: ${error.response?.data?.message || error.message}`);
+      console.error('[WAHA] Erro ao verificar status:', error.response?.data || error.message);
+      return {
+        instance: {
+          instanceName: instanceName || this.instanceName,
+          state: 'close',
+          status: 'error'
+        }
+      };
     }
   }
 
-  /**
-   * Obter informações completas da instância
-   * GET /instance/fetchInstances?instanceName={name}
-   */
   async getInstanceInfo(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get('/instance/fetchInstances', {
-        params: { instanceName: name }
-      });
-      return response.data;
+      const response = await this.client.get(`/api/sessions/${name}`);
+      const me = response.data?.me;
+
+      return [{
+        instance: {
+          instanceName: name,
+          owner: me?.id?.replace('@c.us', '') || null,
+          profileName: me?.pushName || null,
+          profilePictureUrl: null,
+          status: response.data?.status
+        }
+      }];
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao buscar info:', error.response?.data || error.message);
-      throw new Error(`Falha ao buscar informações: ${error.response?.data?.message || error.message}`);
+      console.error('[WAHA] Erro ao buscar info:', error.response?.data || error.message);
+      return [{
+        instance: {
+          instanceName: instanceName || this.instanceName,
+          owner: null,
+          profileName: null,
+          profilePictureUrl: null
+        }
+      }];
     }
   }
 
-  /**
-   * Reiniciar instância
-   * PUT /instance/restart/{instanceName}
-   */
   async restartInstance(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.put(`/instance/restart/${name}`);
-      console.log(`[EvolutionAPI] Instância "${name}" reiniciada`);
+      await this.client.post('/api/sessions/stop', { name });
+      await new Promise(r => setTimeout(r, 2000));
+
+      const webhookUrl = process.env.WEBHOOK_URL || '';
+      const response = await this.client.post('/api/sessions/start', {
+        name: name,
+        config: {
+          webhooks: webhookUrl ? [{
+            url: webhookUrl,
+            events: ['message', 'session.status']
+          }] : []
+        }
+      });
+
+      console.log(`[WAHA] Sessão "${name}" reiniciada`);
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao reiniciar:', error.response?.data || error.message);
+      console.error('[WAHA] Erro ao reiniciar:', error.response?.data || error.message);
       throw new Error(`Falha ao reiniciar: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Desconectar (logout) instância
-   * DELETE /instance/logout/{instanceName}
-   */
   async logoutInstance(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.delete(`/instance/logout/${name}`);
-      console.log(`[EvolutionAPI] Instância "${name}" desconectada`);
+      const response = await this.client.post('/api/sessions/stop', { name });
+      console.log(`[WAHA] Sessão "${name}" desconectada`);
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao desconectar:', error.response?.data || error.message);
+      console.error('[WAHA] Erro ao desconectar:', error.response?.data || error.message);
       throw new Error(`Falha ao desconectar: ${error.response?.data?.message || error.message}`);
     }
   }
@@ -133,71 +226,61 @@ class EvolutionService {
   // MENSAGENS
   // ============================================
 
-  /**
-   * Enviar mensagem de texto
-   * POST /message/sendText/{instanceName}
-   */
   async sendText(phone, message, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      // Formatar número: remover espaços, +, traços
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
+      const chatId = number.includes('@') ? number : `${number}@c.us`;
 
-      const response = await this.client.post(`/message/sendText/${name}`, {
-        number: number,
+      const response = await this.client.post('/api/sendText', {
+        session: name,
+        chatId: chatId,
         text: message
       });
 
-      console.log(`[EvolutionAPI] Mensagem enviada para ${number}`);
-
-      // Salvar no banco
+      console.log(`[WAHA] Mensagem enviada para ${number}`);
       await this._saveOutgoingMessage(number, message, 'text', response.data);
-
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao enviar mensagem:', error.response?.data || error.message);
+      console.error('[WAHA] Erro ao enviar mensagem:', error.response?.data || error.message);
       throw new Error(`Falha ao enviar mensagem: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Enviar mensagem com mídia (imagem, vídeo, documento, áudio)
-   * POST /message/sendMedia/{instanceName}
-   */
   async sendMedia(phone, mediaUrl, caption = '', mediaType = 'image', instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
+      const chatId = number.includes('@') ? number : `${number}@c.us`;
 
-      const response = await this.client.post(`/message/sendMedia/${name}`, {
-        number: number,
-        mediatype: mediaType, // image, video, document, audio
-        media: mediaUrl,
-        caption: caption
+      const response = await this.client.post('/api/sendFile', {
+        session: name,
+        chatId: chatId,
+        file: { url: mediaUrl, caption: caption }
       });
 
-      console.log(`[EvolutionAPI] Mídia enviada para ${number}`);
+      console.log(`[WAHA] Mídia enviada para ${number}`);
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao enviar mídia:', error.response?.data || error.message);
+      console.error('[WAHA] Erro ao enviar mídia:', error.response?.data || error.message);
       throw new Error(`Falha ao enviar mídia: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Enviar mensagem para grupo
-   * POST /message/sendText/{instanceName}
-   */
   async sendToGroup(groupId, message, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.post(`/message/sendText/${name}`, {
-        number: groupId,
+      const chatId = groupId.includes('@') ? groupId : `${groupId}@g.us`;
+
+      const response = await this.client.post('/api/sendText', {
+        session: name,
+        chatId: chatId,
         text: message
       });
+
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao enviar para grupo:', error.response?.data || error.message);
+      console.error('[WAHA] Erro ao enviar para grupo:', error.response?.data || error.message);
       throw new Error(`Falha ao enviar para grupo: ${error.response?.data?.message || error.message}`);
     }
   }
@@ -206,86 +289,51 @@ class EvolutionService {
   // CONTATOS E GRUPOS
   // ============================================
 
-  /**
-   * Buscar todos os contatos
-   * POST /chat/findContacts/{instanceName}
-   */
   async getContacts(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.post(`/chat/findContacts/${name}`, {});
+      const response = await this.client.get('/api/contacts', { params: { session: name } });
       return response.data;
-    } catch (error) {
-      console.error('[EvolutionAPI] Erro ao buscar contatos:', error.response?.data || error.message);
-      throw new Error(`Falha ao buscar contatos: ${error.response?.data?.message || error.message}`);
-    }
+    } catch (error) { return []; }
   }
 
-  /**
-   * Buscar todos os grupos
-   * GET /group/fetchAllGroups/{instanceName}
-   */
   async getGroups(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/group/fetchAllGroups/${name}`, {
-        params: { getParticipants: false }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('[EvolutionAPI] Erro ao buscar grupos:', error.response?.data || error.message);
-      throw new Error(`Falha ao buscar grupos: ${error.response?.data?.message || error.message}`);
-    }
+      const response = await this.client.get(`/api/${name}/groups`);
+      return (response.data || []).map(g => ({
+        id: g.id, subject: g.subject || g.name, size: g.participants?.length || 0, creation: g.creation, desc: g.description || ''
+      }));
+    } catch (error) { return []; }
   }
 
-  /**
-   * Buscar info de um grupo específico
-   * GET /group/findGroupInfos/{instanceName}?groupJid={groupId}
-   */
   async getGroupInfo(groupId, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/group/findGroupInfos/${name}`, {
-        params: { groupJid: groupId }
-      });
+      const response = await this.client.get(`/api/${name}/groups`, { params: { groupId } });
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao buscar grupo:', error.response?.data || error.message);
       throw new Error(`Falha ao buscar grupo: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Buscar foto de perfil
-   * POST /chat/fetchProfilePictureUrl/{instanceName}
-   */
   async getProfilePicture(phone, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
-      const response = await this.client.post(`/chat/fetchProfilePictureUrl/${name}`, {
-        number: number
-      });
-      return response.data;
-    } catch (error) {
-      return { profilePictureUrl: null };
-    }
+      const chatId = number.includes('@') ? number : `${number}@c.us`;
+      const response = await this.client.get('/api/contacts/profile-picture', { params: { session: name, contactId: chatId } });
+      return { profilePictureUrl: response.data?.profilePictureUrl || null };
+    } catch (error) { return { profilePictureUrl: null }; }
   }
 
-  /**
-   * Verificar se número tem WhatsApp
-   * POST /chat/whatsappNumbers/{instanceName}
-   */
   async checkWhatsAppNumber(phone, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
-      const response = await this.client.post(`/chat/whatsappNumbers/${name}`, {
-        numbers: [number]
-      });
+      const response = await this.client.get('/api/contacts/check-exists', { params: { phone: number, session: name } });
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao verificar número:', error.response?.data || error.message);
       throw new Error(`Falha ao verificar número: ${error.response?.data?.message || error.message}`);
     }
   }
@@ -294,210 +342,117 @@ class EvolutionService {
   // WEBHOOK
   // ============================================
 
-  /**
-   * Configurar webhook para receber eventos
-   * POST /webhook/set/{instanceName}
-   */
   async setWebhook(webhookUrl, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.post(`/webhook/set/${name}`, {
-        url: webhookUrl,
-        webhook_by_events: false,
-        webhook_base64: true,
-        events: [
-          'QRCODE_UPDATED',
-          'MESSAGES_UPSERT',
-          'MESSAGES_UPDATE',
-          'MESSAGES_DELETE',
-          'SEND_MESSAGE',
-          'CONTACTS_SET',
-          'CONTACTS_UPSERT',
-          'CONTACTS_UPDATE',
-          'PRESENCE_UPDATE',
-          'CHATS_SET',
-          'CHATS_UPSERT',
-          'CHATS_UPDATE',
-          'CHATS_DELETE',
-          'GROUPS_UPSERT',
-          'GROUP_UPDATE',
-          'GROUP_PARTICIPANTS_UPDATE',
-          'CONNECTION_UPDATE',
-          'CALL'
-        ]
+      await this.client.post('/api/sessions/stop', { name });
+      await new Promise(r => setTimeout(r, 2000));
+
+      const response = await this.client.post('/api/sessions/start', {
+        name: name,
+        config: { webhooks: [{ url: webhookUrl, events: ['message', 'message.any', 'session.status'] }] }
       });
-      console.log(`[EvolutionAPI] Webhook configurado: ${webhookUrl}`);
+
+      console.log(`[WAHA] Webhook configurado: ${webhookUrl}`);
       return response.data;
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao configurar webhook:', error.response?.data || error.message);
       throw new Error(`Falha ao configurar webhook: ${error.response?.data?.message || error.message}`);
     }
   }
 
-  /**
-   * Buscar webhook configurado
-   * GET /webhook/find/{instanceName}
-   */
   async getWebhook(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/webhook/find/${name}`);
-      return response.data;
-    } catch (error) {
-      console.error('[EvolutionAPI] Erro ao buscar webhook:', error.response?.data || error.message);
-      throw new Error(`Falha ao buscar webhook: ${error.response?.data?.message || error.message}`);
-    }
+      const response = await this.client.get(`/api/sessions/${name}`);
+      return response.data?.config?.webhooks || [];
+    } catch (error) { return []; }
   }
 
   // ============================================
   // HELPERS INTERNOS
   // ============================================
 
-  /**
-   * Salvar mensagem enviada no banco de dados
-   */
   async _saveOutgoingMessage(phone, content, mediaType, apiResponse) {
     try {
-      // Buscar conversa existente ou criar nova
       let conversation = await db('conversations')
         .whereRaw("lead_id IN (SELECT id FROM leads WHERE phone = ?)", [phone])
         .first();
 
       if (!conversation) {
-        // Criar lead se não existe
         let lead = await db('leads').where('phone', phone).first();
         if (!lead) {
-          [lead] = await db('leads').insert({
-            name: 'Novo Contato',
-            phone: phone,
-            stage: 'lead',
-            priority: 'normal',
-            score: 0
-          }).returning('*');
+          [lead] = await db('leads').insert({ name: 'Novo Contato', phone, stage: 'lead', priority: 'normal', score: 0 }).returning('*');
         }
-
-        [conversation] = await db('conversations').insert({
-          lead_id: lead.id,
-          status: 'open',
-          last_message: content,
-          last_message_at: new Date()
-        }).returning('*');
+        [conversation] = await db('conversations').insert({ lead_id: lead.id, status: 'open', last_message: content, last_message_at: new Date() }).returning('*');
       }
 
-      // Salvar mensagem
       await db('messages').insert({
-        conversation_id: conversation.id,
-        from_type: 'attendant',
-        content: content,
-        media_type: mediaType,
-        status: 'sent',
-        whatsapp_message_id: apiResponse?.key?.id || null,
-        created_at: new Date()
+        conversation_id: conversation.id, from_type: 'attendant', content, media_type: mediaType,
+        status: 'sent', whatsapp_message_id: apiResponse?.key?.id || apiResponse?.id || null, created_at: new Date()
       });
 
-      // Atualizar conversa
-      await db('conversations')
-        .where('id', conversation.id)
-        .update({
-          last_message: content,
-          last_message_at: new Date(),
-          updated_at: new Date()
-        });
-
+      await db('conversations').where('id', conversation.id).update({ last_message: content, last_message_at: new Date(), updated_at: new Date() });
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao salvar mensagem:', error.message);
+      console.error('[WAHA] Erro ao salvar mensagem:', error.message);
     }
   }
 
-  /**
-   * Processar mensagem recebida pelo webhook
-   * Chamado pela rota POST /api/v1/whatsapp/webhook
-   */
   async processIncomingMessage(webhookData) {
     try {
-      const { data } = webhookData;
-      const messageData = data?.message;
-      const key = data?.key;
+      const payload = webhookData.payload || webhookData.data;
+      if (!payload) return null;
 
-      if (!key || !messageData) return null;
+      const fromMe = payload.fromMe || payload.key?.fromMe;
+      if (fromMe) return null;
 
-      // Ignorar mensagens enviadas por nós
-      if (key.fromMe) return null;
+      let phone, content, pushName, isGroup;
 
-      const phone = key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
-      const isGroup = key.remoteJid.includes('@g.us');
-      const content = messageData.conversation ||
-                      messageData.extendedTextMessage?.text ||
-                      messageData.imageMessage?.caption ||
-                      '[Mídia recebida]';
-      const pushName = data.pushName || 'Desconhecido';
+      if (this.platform === 'waha') {
+        phone = (payload.from || payload.chatId || '').replace('@c.us', '').replace('@g.us', '');
+        content = payload.body || payload.text || payload.caption || '[Mídia recebida]';
+        pushName = payload.notifyName || payload._data?.notifyName || 'Desconhecido';
+        isGroup = (payload.from || '').includes('@g.us');
+      } else {
+        const messageData = payload?.message;
+        const key = payload?.key;
+        if (!key || !messageData) return null;
+        phone = key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+        isGroup = key.remoteJid.includes('@g.us');
+        content = messageData.conversation || messageData.extendedTextMessage?.text || messageData.imageMessage?.caption || '[Mídia recebida]';
+        pushName = payload.pushName || 'Desconhecido';
+      }
 
-      // Buscar ou criar lead
+      if (!phone) return null;
+
       let lead = await db('leads').where('phone', phone).first();
       if (!lead) {
-        [lead] = await db('leads').insert({
-          name: pushName,
-          phone: phone,
-          stage: 'lead',
-          priority: 'normal',
-          score: 10,
-          source: isGroup ? 'whatsapp_group' : 'whatsapp_direct'
-        }).returning('*');
-        console.log(`[EvolutionAPI] Novo lead criado: ${pushName} (${phone})`);
+        [lead] = await db('leads').insert({ name: pushName, phone, stage: 'lead', priority: 'normal', score: 10, source: isGroup ? 'whatsapp_group' : 'whatsapp_direct' }).returning('*');
+        console.log(`[WAHA] Novo lead criado: ${pushName} (${phone})`);
       }
 
-      // Buscar ou criar conversa
-      let conversation = await db('conversations')
-        .where('lead_id', lead.id)
-        .first();
-
+      let conversation = await db('conversations').where('lead_id', lead.id).first();
       if (!conversation) {
-        [conversation] = await db('conversations').insert({
-          lead_id: lead.id,
-          status: 'open',
-          last_message: content,
-          last_message_at: new Date(),
-          unread_count: 1
-        }).returning('*');
+        [conversation] = await db('conversations').insert({ lead_id: lead.id, status: 'open', last_message: content, last_message_at: new Date(), unread_count: 1 }).returning('*');
       } else {
-        await db('conversations')
-          .where('id', conversation.id)
-          .update({
-            last_message: content,
-            last_message_at: new Date(),
-            unread_count: db.raw('unread_count + 1'),
-            status: 'open',
-            updated_at: new Date()
-          });
+        await db('conversations').where('id', conversation.id).update({ last_message: content, last_message_at: new Date(), unread_count: db.raw('unread_count + 1'), status: 'open', updated_at: new Date() });
       }
 
-      // Salvar mensagem
+      let mediaType = 'text';
+      if (payload.hasMedia || payload.mediaUrl) {
+        if (payload.type === 'image' || payload.mimetype?.startsWith('image')) mediaType = 'image';
+        else if (payload.type === 'video' || payload.mimetype?.startsWith('video')) mediaType = 'video';
+        else if (payload.type === 'audio' || payload.type === 'ptt') mediaType = 'audio';
+        else if (payload.type === 'document') mediaType = 'document';
+      }
+
       const [savedMessage] = await db('messages').insert({
-        conversation_id: conversation.id,
-        from_type: 'lead',
-        from_id: phone,
-        content: content,
-        media_type: messageData.imageMessage ? 'image' :
-                    messageData.audioMessage ? 'audio' :
-                    messageData.videoMessage ? 'video' :
-                    messageData.documentMessage ? 'document' : 'text',
-        status: 'received',
-        whatsapp_message_id: key.id,
-        created_at: new Date()
+        conversation_id: conversation.id, from_type: 'lead', from_id: phone, content,
+        media_type: mediaType, status: 'received', whatsapp_message_id: payload.id || payload.key?.id || null, created_at: new Date()
       }).returning('*');
 
-      return {
-        lead,
-        conversation,
-        message: savedMessage,
-        content,
-        phone,
-        pushName,
-        isGroup
-      };
-
+      return { lead, conversation, message: savedMessage, content, phone, pushName, isGroup };
     } catch (error) {
-      console.error('[EvolutionAPI] Erro ao processar mensagem:', error.message);
+      console.error('[WAHA] Erro ao processar mensagem:', error.message);
       throw error;
     }
   }
