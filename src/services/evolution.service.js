@@ -8,6 +8,9 @@ class EvolutionService {
     this.instanceName = process.env.EVOLUTION_INSTANCE_NAME || 'default';
     this.platform = process.env.WHATSAPP_PLATFORM || 'waha';
 
+    // Centralized webhook events list
+    this.webhookEvents = ['message', 'message.any', 'session.status'];
+
     this.client = axios.create({
       baseURL: this.apiUrl,
       headers: {
@@ -18,29 +21,55 @@ class EvolutionService {
     });
 
     console.log(`[WAHA] Conectando em: ${this.apiUrl}`);
-    console.log(`[WAHA] Sessão: ${this.instanceName}`);
+    console.log(`[WAHA] Sessao: ${this.instanceName}`);
+  }
+
+  // Helper: build webhook config for session start
+  _buildWebhookConfig() {
+    const webhookUrl = process.env.WEBHOOK_URL || '';
+    return {
+      webhooks: webhookUrl ? [{
+        url: webhookUrl,
+        events: this.webhookEvents
+      }] : []
+    };
+  }
+
+  // Helper: clean phone/chatId - strips all WhatsApp suffixes
+  _cleanPhone(rawId) {
+    if (!rawId) return '';
+    return rawId
+      .replace('@c.us', '')
+      .replace('@s.whatsapp.net', '')
+      .replace('@g.us', '')
+      .replace('@lid', '')
+      .replace('@broadcast', '')
+      .trim();
+  }
+
+  // Helper: check if chatId is a group or broadcast (not a direct contact)
+  _isGroupOrBroadcast(chatId) {
+    if (!chatId) return false;
+    return chatId.includes('@g.us') ||
+           chatId.includes('@broadcast') ||
+           chatId.includes('120363') || // WhatsApp community/group prefix
+           chatId.includes('-'); // group IDs contain dashes
   }
 
   // ============================================
-  // INSTÂNCIA / CONEXÃO
+  // INSTANCIA / CONEXAO
   // ============================================
 
   async createInstance(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const webhookUrl = process.env.WEBHOOK_URL || '';
 
       const response = await this.client.post('/api/sessions/start', {
         name: name,
-        config: {
-          webhooks: webhookUrl ? [{
-            url: webhookUrl,
-            events: ['message', 'session.status']
-          }] : []
-        }
+        config: this._buildWebhookConfig()
       });
 
-      console.log(`[WAHA] Sessão "${name}" criada`);
+      console.log(`[WAHA] Sessao "${name}" criada`);
 
       await new Promise(r => setTimeout(r, 3000));
 
@@ -59,8 +88,8 @@ class EvolutionService {
         return { instance: { instanceName: name, status: 'created' } };
       }
     } catch (error) {
-      console.error('[WAHA] Erro ao criar sessão:', error.response?.data || error.message);
-      throw new Error(`Falha ao criar sessão: ${error.response?.data?.message || error.message}`);
+      console.error('[WAHA] Erro ao criar sessao:', error.response?.data || error.message);
+      throw new Error(`Falha ao criar sessao: ${error.response?.data?.message || error.message}`);
     }
   }
 
@@ -80,15 +109,9 @@ class EvolutionService {
         try { await this.client.post('/api/sessions/stop', { name }); } catch (e) {}
         await new Promise(r => setTimeout(r, 1000));
 
-        const webhookUrl = process.env.WEBHOOK_URL || '';
         await this.client.post('/api/sessions/start', {
           name: name,
-          config: {
-            webhooks: webhookUrl ? [{
-              url: webhookUrl,
-              events: ['message', 'session.status']
-            }] : []
-          }
+          config: this._buildWebhookConfig()
         });
         await new Promise(r => setTimeout(r, 4000));
       }
@@ -173,18 +196,12 @@ class EvolutionService {
       await this.client.post('/api/sessions/stop', { name });
       await new Promise(r => setTimeout(r, 2000));
 
-      const webhookUrl = process.env.WEBHOOK_URL || '';
       const response = await this.client.post('/api/sessions/start', {
         name: name,
-        config: {
-          webhooks: webhookUrl ? [{
-            url: webhookUrl,
-            events: ['message', 'session.status']
-          }] : []
-        }
+        config: this._buildWebhookConfig()
       });
 
-      console.log(`[WAHA] Sessão "${name}" reiniciada`);
+      console.log(`[WAHA] Sessao "${name}" reiniciada`);
       return response.data;
     } catch (error) {
       console.error('[WAHA] Erro ao reiniciar:', error.response?.data || error.message);
@@ -196,7 +213,7 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.post('/api/sessions/stop', { name });
-      console.log(`[WAHA] Sessão "${name}" desconectada`);
+      console.log(`[WAHA] Sessao "${name}" desconectada`);
       return response.data;
     } catch (error) {
       console.error('[WAHA] Erro ao desconectar:', error.response?.data || error.message);
@@ -241,11 +258,11 @@ class EvolutionService {
         file: { url: mediaUrl, caption: caption }
       });
 
-      console.log(`[WAHA] Mídia enviada para ${number}`);
+      console.log(`[WAHA] Midia enviada para ${number}`);
       return response.data;
     } catch (error) {
-      console.error('[WAHA] Erro ao enviar mídia:', error.response?.data || error.message);
-      throw new Error(`Falha ao enviar mídia: ${error.response?.data?.message || error.message}`);
+      console.error('[WAHA] Erro ao enviar midia:', error.response?.data || error.message);
+      throw new Error(`Falha ao enviar midia: ${error.response?.data?.message || error.message}`);
     }
   }
 
@@ -332,7 +349,7 @@ class EvolutionService {
       });
       return response.data;
     } catch (error) {
-      throw new Error(`Falha ao verificar número: ${error.response?.data?.message || error.message}`);
+      throw new Error(`Falha ao verificar numero: ${error.response?.data?.message || error.message}`);
     }
   }
 
@@ -352,7 +369,7 @@ class EvolutionService {
         config: {
           webhooks: [{
             url: webhookUrl,
-            events: ['message', 'message.any', 'session.status']
+            events: this.webhookEvents
           }]
         }
       });
@@ -384,7 +401,7 @@ class EvolutionService {
       .first();
 
     if (!instance) {
-      console.log(`[WAHA] Criando registro de instância "${this.instanceName}" no banco`);
+      console.log(`[WAHA] Criando registro de instancia "${this.instanceName}" no banco`);
       let user = await db('users').where('role', 'admin').first();
       if (!user) { user = await db('users').first(); }
 
@@ -403,16 +420,18 @@ class EvolutionService {
 
   async _saveOutgoingMessage(phone, content, mediaType, apiResponse) {
     try {
+      const cleanedPhone = this._cleanPhone(phone);
+
       let conversation = await db('conversations')
-        .whereRaw("lead_id IN (SELECT id FROM leads WHERE phone = ?)", [phone])
+        .whereRaw("lead_id IN (SELECT id FROM leads WHERE phone = ?)", [cleanedPhone])
         .first();
 
       if (!conversation) {
-        let lead = await db('leads').where('phone', phone).first();
+        let lead = await db('leads').where('phone', cleanedPhone).first();
         if (!lead) {
           [lead] = await db('leads').insert({
             name: 'Novo Contato',
-            phone,
+            phone: cleanedPhone,
             stage: 'lead',
             priority: 'normal',
             score: 0
@@ -454,46 +473,93 @@ class EvolutionService {
   async processIncomingMessage(webhookData) {
     try {
       const payload = webhookData.payload || webhookData.data;
-      if (!payload) return null;
+      if (!payload) {
+        console.log('[WAHA] Webhook sem payload, ignorando');
+        return null;
+      }
 
-      const fromMe = payload.fromMe || payload.key?.fromMe;
+      // Log raw webhook for debugging
+      const event = webhookData.event || 'unknown';
+      const rawFrom = payload.from || payload.chatId || '';
+      const rawTo = payload.to || '';
+      console.log(`[WAHA] Processando evento=${event} from=${rawFrom} to=${rawTo} fromMe=${payload.fromMe}`);
 
-      let phone, content, pushName, isGroup;
+      const fromMe = payload.fromMe || payload.key?.fromMe || false;
 
+      // Determine the chatId (who we're talking to)
+      let rawChatId;
+      if (fromMe) {
+        rawChatId = payload.to || payload.chatId || '';
+      } else {
+        rawChatId = payload.from || payload.chatId || '';
+      }
+
+      // Skip status broadcasts
+      if (rawChatId.includes('status@broadcast') || rawChatId === 'status@broadcast') {
+        console.log('[WAHA] Ignorando status broadcast');
+        return null;
+      }
+
+      // Detect groups and broadcasts
+      const isGroup = this._isGroupOrBroadcast(rawChatId);
+
+      // Skip group messages for now (they create noise)
+      if (isGroup) {
+        console.log(`[WAHA] Ignorando mensagem de grupo: ${rawChatId}`);
+        return null;
+      }
+
+      // Clean the phone number (strip all WhatsApp suffixes)
+      const phone = this._cleanPhone(rawChatId);
+
+      if (!phone) {
+        console.log('[WAHA] Telefone vazio apos limpeza, ignorando');
+        return null;
+      }
+
+      // Extract message content
+      let content;
       if (this.platform === 'waha') {
-        if (fromMe) {
-          // For sent messages, the recipient is in 'to'
-          phone = (payload.to || payload.chatId || '').replace('@c.us', '').replace('@g.us', '');
-        } else {
-          phone = (payload.from || payload.chatId || '').replace('@c.us', '').replace('@g.us', '');
-        }
-        content = payload.body || payload.text || payload.caption || '[Mídia recebida]';
-        pushName = payload.notifyName || payload._data?.notifyName || null;
-        isGroup = (payload.from || payload.to || '').includes('@g.us');
+        content = payload.body || payload.text || payload.caption || '';
+        if (!content && payload.hasMedia) content = '[Midia recebida]';
+        if (!content && payload.type && payload.type !== 'chat') content = `[${payload.type}]`;
+        if (!content) content = '[Mensagem]';
       } else {
         const messageData = payload?.message;
         const key = payload?.key;
         if (!key || !messageData) return null;
-        phone = key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
-        isGroup = key.remoteJid.includes('@g.us');
-        content = messageData.conversation || messageData.extendedTextMessage?.text || messageData.imageMessage?.caption || '[Mídia recebida]';
-        pushName = payload.pushName || 'Desconhecido';
+        content = messageData.conversation || messageData.extendedTextMessage?.text || messageData.imageMessage?.caption || '[Midia recebida]';
       }
 
-      if (!phone) return null;
+      // Extract pushName from multiple possible locations
+      let pushName = null;
+      if (this.platform === 'waha') {
+        pushName = payload.notifyName
+          || payload._data?.notifyName
+          || payload.pushName
+          || payload.senderName
+          || payload.verifiedBizName
+          || null;
+      } else {
+        pushName = payload.pushName || null;
+      }
 
+      console.log(`[WAHA] Phone=${phone} pushName=${pushName} fromMe=${fromMe} content=${content.substring(0, 50)}`);
+
+      // Find or create lead
       let lead = await db('leads').where('phone', phone).first();
 
       if (!lead) {
+        const leadName = pushName || 'Desconhecido';
         [lead] = await db('leads').insert({
-          name: pushName || 'Desconhecido',
+          name: leadName,
           phone,
           stage: 'lead',
           priority: 'normal',
           score: 10,
-          source: isGroup ? 'whatsapp_group' : 'whatsapp_direct'
+          source: 'whatsapp_direct'
         }).returning('*');
-        console.log(`[WAHA] Novo lead criado: ${pushName || 'Desconhecido'} (${phone})`);
+        console.log(`[WAHA] Novo lead criado: ${leadName} (${phone})`);
       }
 
       // Update lead name if we have a real pushName and current name is generic
@@ -507,6 +573,7 @@ class EvolutionService {
         console.log(`[WAHA] Lead atualizado com nome: ${pushName} (${phone})`);
       }
 
+      // Find or create conversation
       let conversation = await db('conversations').where('lead_id', lead.id).first();
 
       if (!conversation) {
@@ -519,6 +586,7 @@ class EvolutionService {
           last_message_at: new Date(),
           unread_count: fromMe ? 0 : 1
         }).returning('*');
+        console.log(`[WAHA] Nova conversa criada para lead ${lead.id}`);
       } else {
         const updateData = {
           last_message: content,
@@ -532,6 +600,7 @@ class EvolutionService {
         await db('conversations').where('id', conversation.id).update(updateData);
       }
 
+      // Detect media type
       let mediaType = 'text';
       if (payload.hasMedia || payload.mediaUrl) {
         if (payload.type === 'image' || payload.mimetype?.startsWith('image')) mediaType = 'image';
@@ -540,6 +609,7 @@ class EvolutionService {
         else if (payload.type === 'document') mediaType = 'document';
       }
 
+      // Save message
       const [savedMessage] = await db('messages').insert({
         conversation_id: conversation.id,
         from_type: fromMe ? 'attendant' : 'lead',
@@ -551,12 +621,14 @@ class EvolutionService {
         created_at: new Date()
       }).returning('*');
 
+      console.log(`[WAHA] Mensagem salva: id=${savedMessage.id} fromMe=${fromMe} type=${mediaType}`);
+
       return {
         lead, conversation, message: savedMessage,
         content, phone, pushName, isGroup
       };
     } catch (error) {
-      console.error('[WAHA] Erro ao processar mensagem:', error.message);
+      console.error('[WAHA] Erro ao processar mensagem:', error.message, error.stack);
       throw error;
     }
   }
