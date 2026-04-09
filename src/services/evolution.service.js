@@ -87,9 +87,7 @@ class EvolutionService {
       // Se sessão não existe ou falhou, iniciar nova
       if (!sessionStatus || sessionStatus === 'FAILED' || sessionStatus === 'STOPPED') {
         // Tentar parar primeiro
-        try {
-          await this.client.post('/api/sessions/stop', { name });
-        } catch (e) {}
+        try { await this.client.post('/api/sessions/stop', { name }); } catch (e) {}
         await new Promise(r => setTimeout(r, 1000));
 
         const webhookUrl = process.env.WEBHOOK_URL || '';
@@ -109,14 +107,10 @@ class EvolutionService {
       const qrResponse = await this.client.get(`/api/${name}/auth/qr`, {
         responseType: 'arraybuffer'
       });
-
       const base64 = Buffer.from(qrResponse.data).toString('base64');
       const qrBase64 = `data:image/png;base64,${base64}`;
 
-      return {
-        base64: qrBase64,
-        code: qrBase64
-      };
+      return { base64: qrBase64, code: qrBase64 };
     } catch (error) {
       console.error('[WAHA] Erro ao obter QR Code:', error.response?.data || error.message);
       throw new Error(`Falha ao obter QR Code: ${error.response?.data?.message || error.message}`);
@@ -256,7 +250,10 @@ class EvolutionService {
       const response = await this.client.post('/api/sendFile', {
         session: name,
         chatId: chatId,
-        file: { url: mediaUrl, caption: caption }
+        file: {
+          url: mediaUrl,
+          caption: caption
+        }
       });
 
       console.log(`[WAHA] Mídia enviada para ${number}`);
@@ -292,9 +289,13 @@ class EvolutionService {
   async getContacts(instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get('/api/contacts', { params: { session: name } });
+      const response = await this.client.get('/api/contacts', {
+        params: { session: name }
+      });
       return response.data;
-    } catch (error) { return []; }
+    } catch (error) {
+      return [];
+    }
   }
 
   async getGroups(instanceName = null) {
@@ -302,15 +303,23 @@ class EvolutionService {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/${name}/groups`);
       return (response.data || []).map(g => ({
-        id: g.id, subject: g.subject || g.name, size: g.participants?.length || 0, creation: g.creation, desc: g.description || ''
+        id: g.id,
+        subject: g.subject || g.name,
+        size: g.participants?.length || 0,
+        creation: g.creation,
+        desc: g.description || ''
       }));
-    } catch (error) { return []; }
+    } catch (error) {
+      return [];
+    }
   }
 
   async getGroupInfo(groupId, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
-      const response = await this.client.get(`/api/${name}/groups`, { params: { groupId } });
+      const response = await this.client.get(`/api/${name}/groups`, {
+        params: { groupId }
+      });
       return response.data;
     } catch (error) {
       throw new Error(`Falha ao buscar grupo: ${error.response?.data?.message || error.message}`);
@@ -322,16 +331,26 @@ class EvolutionService {
       const name = instanceName || this.instanceName;
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
       const chatId = number.includes('@') ? number : `${number}@c.us`;
-      const response = await this.client.get('/api/contacts/profile-picture', { params: { session: name, contactId: chatId } });
+
+      const response = await this.client.get('/api/contacts/profile-picture', {
+        params: { session: name, contactId: chatId }
+      });
+
       return { profilePictureUrl: response.data?.profilePictureUrl || null };
-    } catch (error) { return { profilePictureUrl: null }; }
+    } catch (error) {
+      return { profilePictureUrl: null };
+    }
   }
 
   async checkWhatsAppNumber(phone, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
       const number = phone.replace(/[\s\-\+\(\)]/g, '');
-      const response = await this.client.get('/api/contacts/check-exists', { params: { phone: number, session: name } });
+
+      const response = await this.client.get('/api/contacts/check-exists', {
+        params: { phone: number, session: name }
+      });
+
       return response.data;
     } catch (error) {
       throw new Error(`Falha ao verificar número: ${error.response?.data?.message || error.message}`);
@@ -345,12 +364,18 @@ class EvolutionService {
   async setWebhook(webhookUrl, instanceName = null) {
     try {
       const name = instanceName || this.instanceName;
+
       await this.client.post('/api/sessions/stop', { name });
       await new Promise(r => setTimeout(r, 2000));
 
       const response = await this.client.post('/api/sessions/start', {
         name: name,
-        config: { webhooks: [{ url: webhookUrl, events: ['message', 'message.any', 'session.status'] }] }
+        config: {
+          webhooks: [{
+            url: webhookUrl,
+            events: ['message', 'message.any', 'session.status']
+          }]
+        }
       });
 
       console.log(`[WAHA] Webhook configurado: ${webhookUrl}`);
@@ -365,12 +390,37 @@ class EvolutionService {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/sessions/${name}`);
       return response.data?.config?.webhooks || [];
-    } catch (error) { return []; }
+    } catch (error) {
+      return [];
+    }
   }
 
   // ============================================
   // HELPERS INTERNOS
   // ============================================
+
+  /**
+   * Busca ou cria o registro da instância WhatsApp no banco
+   * Garante que sempre temos um instance_id válido para conversas
+   */
+  async _getOrCreateInstance() {
+    let instance = await db('whatsapp_instances')
+      .where('instance_name', this.instanceName)
+      .first();
+
+    if (!instance) {
+      console.log(`[WAHA] Criando registro de instância "${this.instanceName}" no banco`);
+      [instance] = await db('whatsapp_instances').insert({
+        instance_name: this.instanceName,
+        status: 'connected',
+        api_url: this.apiUrl,
+        created_at: new Date(),
+        updated_at: new Date()
+      }).returning('*');
+    }
+
+    return instance;
+  }
 
   async _saveOutgoingMessage(phone, content, mediaType, apiResponse) {
     try {
@@ -381,17 +431,42 @@ class EvolutionService {
       if (!conversation) {
         let lead = await db('leads').where('phone', phone).first();
         if (!lead) {
-          [lead] = await db('leads').insert({ name: 'Novo Contato', phone, stage: 'lead', priority: 'normal', score: 0 }).returning('*');
+          [lead] = await db('leads').insert({
+            name: 'Novo Contato',
+            phone,
+            stage: 'lead',
+            priority: 'normal',
+            score: 0
+          }).returning('*');
         }
-        [conversation] = await db('conversations').insert({ lead_id: lead.id, status: 'open', last_message: content, last_message_at: new Date() }).returning('*');
+
+        // Buscar ou criar instância para obter instance_id
+        const instance = await this._getOrCreateInstance();
+
+        [conversation] = await db('conversations').insert({
+          lead_id: lead.id,
+          instance_id: instance.id,
+          status: 'open',
+          last_message: content,
+          last_message_at: new Date()
+        }).returning('*');
       }
 
       await db('messages').insert({
-        conversation_id: conversation.id, from_type: 'attendant', content, media_type: mediaType,
-        status: 'sent', whatsapp_message_id: apiResponse?.key?.id || apiResponse?.id || null, created_at: new Date()
+        conversation_id: conversation.id,
+        from_type: 'attendant',
+        content,
+        media_type: mediaType,
+        status: 'sent',
+        whatsapp_message_id: apiResponse?.key?.id || apiResponse?.id || null,
+        created_at: new Date()
       });
 
-      await db('conversations').where('id', conversation.id).update({ last_message: content, last_message_at: new Date(), updated_at: new Date() });
+      await db('conversations').where('id', conversation.id).update({
+        last_message: content,
+        last_message_at: new Date(),
+        updated_at: new Date()
+      });
     } catch (error) {
       console.error('[WAHA] Erro ao salvar mensagem:', error.message);
     }
@@ -416,9 +491,13 @@ class EvolutionService {
         const messageData = payload?.message;
         const key = payload?.key;
         if (!key || !messageData) return null;
+
         phone = key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
         isGroup = key.remoteJid.includes('@g.us');
-        content = messageData.conversation || messageData.extendedTextMessage?.text || messageData.imageMessage?.caption || '[Mídia recebida]';
+        content = messageData.conversation ||
+          messageData.extendedTextMessage?.text ||
+          messageData.imageMessage?.caption ||
+          '[Mídia recebida]';
         pushName = payload.pushName || 'Desconhecido';
       }
 
@@ -426,15 +505,38 @@ class EvolutionService {
 
       let lead = await db('leads').where('phone', phone).first();
       if (!lead) {
-        [lead] = await db('leads').insert({ name: pushName, phone, stage: 'lead', priority: 'normal', score: 10, source: isGroup ? 'whatsapp_group' : 'whatsapp_direct' }).returning('*');
+        [lead] = await db('leads').insert({
+          name: pushName,
+          phone,
+          stage: 'lead',
+          priority: 'normal',
+          score: 10,
+          source: isGroup ? 'whatsapp_group' : 'whatsapp_direct'
+        }).returning('*');
         console.log(`[WAHA] Novo lead criado: ${pushName} (${phone})`);
       }
 
       let conversation = await db('conversations').where('lead_id', lead.id).first();
       if (!conversation) {
-        [conversation] = await db('conversations').insert({ lead_id: lead.id, status: 'open', last_message: content, last_message_at: new Date(), unread_count: 1 }).returning('*');
+        // Buscar ou criar instância para obter instance_id
+        const instance = await this._getOrCreateInstance();
+
+        [conversation] = await db('conversations').insert({
+          lead_id: lead.id,
+          instance_id: instance.id,
+          status: 'open',
+          last_message: content,
+          last_message_at: new Date(),
+          unread_count: 1
+        }).returning('*');
       } else {
-        await db('conversations').where('id', conversation.id).update({ last_message: content, last_message_at: new Date(), unread_count: db.raw('unread_count + 1'), status: 'open', updated_at: new Date() });
+        await db('conversations').where('id', conversation.id).update({
+          last_message: content,
+          last_message_at: new Date(),
+          unread_count: db.raw('unread_count + 1'),
+          status: 'open',
+          updated_at: new Date()
+        });
       }
 
       let mediaType = 'text';
@@ -446,11 +548,25 @@ class EvolutionService {
       }
 
       const [savedMessage] = await db('messages').insert({
-        conversation_id: conversation.id, from_type: 'lead', from_id: phone, content,
-        media_type: mediaType, status: 'received', whatsapp_message_id: payload.id || payload.key?.id || null, created_at: new Date()
+        conversation_id: conversation.id,
+        from_type: 'lead',
+        from_id: phone,
+        content,
+        media_type: mediaType,
+        status: 'received',
+        whatsapp_message_id: payload.id || payload.key?.id || null,
+        created_at: new Date()
       }).returning('*');
 
-      return { lead, conversation, message: savedMessage, content, phone, pushName, isGroup };
+      return {
+        lead,
+        conversation,
+        message: savedMessage,
+        content,
+        phone,
+        pushName,
+        isGroup
+      };
     } catch (error) {
       console.error('[WAHA] Erro ao processar mensagem:', error.message);
       throw error;
