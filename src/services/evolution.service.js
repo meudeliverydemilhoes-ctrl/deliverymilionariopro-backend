@@ -63,7 +63,9 @@ class EvolutionService {
           instance: { instanceName: name, status: 'created' }
         };
       } catch (qrErr) {
-        return { instance: { instanceName: name, status: 'created' } };
+        return {
+          instance: { instanceName: name, status: 'created' }
+        };
       }
     } catch (error) {
       console.error('[WAHA] Erro ao criar sessão:', error.response?.data || error.message);
@@ -100,6 +102,7 @@ class EvolutionService {
             }] : []
           }
         });
+
         await new Promise(r => setTimeout(r, 4000));
       }
 
@@ -121,8 +124,8 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/sessions/${name}`);
-      const status = response.data?.status;
 
+      const status = response.data?.status;
       // Mapear status WAHA para formato esperado pelo routes
       const stateMap = {
         'WORKING': 'open',
@@ -155,8 +158,8 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/sessions/${name}`);
-      const me = response.data?.me;
 
+      const me = response.data?.me;
       return [{
         instance: {
           instanceName: name,
@@ -233,7 +236,9 @@ class EvolutionService {
       });
 
       console.log(`[WAHA] Mensagem enviada para ${number}`);
+
       await this._saveOutgoingMessage(number, message, 'text', response.data);
+
       return response.data;
     } catch (error) {
       console.error('[WAHA] Erro ao enviar mensagem:', error.response?.data || error.message);
@@ -302,6 +307,7 @@ class EvolutionService {
     try {
       const name = instanceName || this.instanceName;
       const response = await this.client.get(`/api/${name}/groups`);
+
       return (response.data || []).map(g => ({
         id: g.id,
         subject: g.subject || g.name,
@@ -463,6 +469,7 @@ class EvolutionService {
       await db('messages').insert({
         conversation_id: conversation.id,
         from_type: 'attendant',
+        from_id: 'system',
         content,
         media_type: mediaType,
         status: 'sent',
@@ -475,6 +482,7 @@ class EvolutionService {
         last_message_at: new Date(),
         updated_at: new Date()
       });
+
     } catch (error) {
       console.error('[WAHA] Erro ao salvar mensagem:', error.message);
     }
@@ -503,9 +511,9 @@ class EvolutionService {
         phone = key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
         isGroup = key.remoteJid.includes('@g.us');
         content = messageData.conversation ||
-          messageData.extendedTextMessage?.text ||
-          messageData.imageMessage?.caption ||
-          '[Mídia recebida]';
+                  messageData.extendedTextMessage?.text ||
+                  messageData.imageMessage?.caption ||
+                  '[Mídia recebida]';
         pushName = payload.pushName || 'Desconhecido';
       }
 
@@ -561,20 +569,12 @@ class EvolutionService {
         from_id: phone,
         content,
         media_type: mediaType,
-        status: 'received',
+        status: 'delivered',
         whatsapp_message_id: payload.id || payload.key?.id || null,
         created_at: new Date()
       }).returning('*');
 
-      return {
-        lead,
-        conversation,
-        message: savedMessage,
-        content,
-        phone,
-        pushName,
-        isGroup
-      };
+      return { lead, conversation, message: savedMessage, content, phone, pushName, isGroup };
     } catch (error) {
       console.error('[WAHA] Erro ao processar mensagem:', error.message);
       throw error;
