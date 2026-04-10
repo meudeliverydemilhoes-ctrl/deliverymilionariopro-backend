@@ -5,16 +5,30 @@ const evolutionService = require('../services/evolution.service');
 const chatbotService = require('../services/anthropic.service');
 const db = require('../config/database');
 
+// ============================================
+// DEBUG: Store last 20 raw webhook payloads
+// ============================================
+const webhookDebugLog = [];
+const MAX_DEBUG_ENTRIES = 20;
+
+/**
+ * GET /api/v1/whatsapp/debug-webhooks
+ * Retorna os ultimos webhooks raw recebidos (SEM auth para facilitar debug)
+ */
+router.get('/debug-webhooks', (req, res) => {
+  res.json({
+    total: webhookDebugLog.length,
+    webhooks: webhookDebugLog
+  });
+});
+
 /**
  * POST /api/v1/whatsapp/connect
  * Conectar WhatsApp via QR Code (WAHA)
  */
 router.post('/connect', verifyToken, async (req, res) => {
   try {
-    // Tenta obter QR Code da sessão existente
     const qrData = await evolutionService.getQRCode();
-
-    // Salvar/atualizar instância no banco
     const existing = await db('whatsapp_instances')
       .where('instance_name', evolutionService.instanceName)
       .first();
@@ -46,7 +60,6 @@ router.post('/connect', verifyToken, async (req, res) => {
       }
     });
   } catch (error) {
-    // Se sessão não existe, criar uma nova
     if (error.message.includes('not found') || error.message.includes('404') || error.message.includes('Falha')) {
       try {
         const createData = await evolutionService.createInstance();
@@ -71,7 +84,6 @@ router.post('/connect', verifyToken, async (req, res) => {
 
 /**
  * GET /api/v1/whatsapp/qrcode
- * Obter QR Code atual
  */
 router.get('/qrcode', verifyToken, async (req, res) => {
   try {
@@ -90,16 +102,13 @@ router.get('/qrcode', verifyToken, async (req, res) => {
 
 /**
  * GET /api/v1/whatsapp/status
- * Status da conexão WhatsApp
  */
 router.get('/status', verifyToken, async (req, res) => {
   try {
     const state = await evolutionService.getConnectionState();
     const info = await evolutionService.getInstanceInfo();
-
     const isConnected = state.instance?.state === 'open';
 
-    // Atualizar status no banco
     await db('whatsapp_instances')
       .where('instance_name', evolutionService.instanceName)
       .update({
@@ -122,11 +131,7 @@ router.get('/status', verifyToken, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      data: {
-        connected: false,
-        state: 'error',
-        message: error.message
-      }
+      data: { connected: false, state: 'error', message: error.message }
     });
   }
 });
@@ -137,11 +142,9 @@ router.get('/status', verifyToken, async (req, res) => {
 router.post('/disconnect', verifyToken, async (req, res) => {
   try {
     await evolutionService.logoutInstance();
-
     await db('whatsapp_instances')
       .where('instance_name', evolutionService.instanceName)
       .update({ status: 'disconnected', updated_at: new Date() });
-
     res.json({ success: true, message: 'WhatsApp desconectado' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -166,12 +169,8 @@ router.post('/restart', verifyToken, async (req, res) => {
 router.get('/groups', verifyToken, async (req, res) => {
   try {
     const groups = await evolutionService.getGroups();
-
     for (const group of (groups || [])) {
-      const existing = await db('whatsapp_groups')
-        .where('group_id', group.id)
-        .first();
-
+      const existing = await db('whatsapp_groups').where('group_id', group.id).first();
       if (!existing) {
         await db('whatsapp_groups').insert({
           group_id: group.id,
@@ -181,12 +180,12 @@ router.get('/groups', verifyToken, async (req, res) => {
           created_at: new Date()
         });
       } else {
-        await db('whatsapp_groups')
-          .where('id', existing.id)
-          .update({ name: group.subject, members_count: group.size || 0 });
+        await db('whatsapp_groups').where('id', existing.id).update({
+          name: group.subject,
+          members_count: group.size || 0
+        });
       }
     }
-
     res.json({
       success: true,
       data: (groups || []).map(g => ({
@@ -275,10 +274,33 @@ router.post('/webhook', async (req, res) => {
     const event = body.event;
     const session = body.session || body.instance;
 
+    // DEBUG: Save raw webhook payload
+    webhookDebugLog.unshift({
+      timestamp: new Date().toISOString(),
+      event: event,
+      raw: JSON.parse(JSON.stringify(body))
+    });
+    if (webhookDebugLog.length > MAX_DEBUG_ENTRIES) {
+      webhookDebugLog.length = MAX_DEBUG_ENTRIES;
+    }
+
     console.log(`[Webhook] Evento: ${event} | Sessão: ${session}`);
+    console.log(`[Webhook] RAW BODY KEYS: ${Object.keys(body).join(', ')}`);
+    if (body.payload) {
+      console.log(`[Webhook] PAYLOAD KEYS: ${Object.keys(body.payload).join(', ')}`);
+      console.log(`[Webhook] payload.from=${body.payload.from} payload.to=${body.payload.to} payload.fromMe=${body.payload.fromMe}`);
+      console.log(`[Webhook] payload.chatId=${body.payload.chatId} payload.participant=${body.payload.participant}`);
+      console.log(`[Webhook] payload.notifyName=${body.payload.notifyName} payload.pushName=${body.payload.pushName}`);
+      console.log(`[Webhook] payload.body=${(body.payload.body || '').substring(0, 80)}`);
+      if (body.payload._data) {
+        console.log(`[Webhook] payload._data KEYS: ${Object.keys(body.payload._data).join(', ')}`);
+      }
+      if (body.payload.key) {
+        console.log(`[Webhook] payload.key: ${JSON.stringify(body.payload.key)}`);
+      }
+    }
 
     switch (event) {
-      // ---- WAHA: Nova mensagem ----
       case 'message':
       case 'message.any':
       case 'messages.upsert':
@@ -286,7 +308,6 @@ router.post('/webhook', async (req, res) => {
         const result = await evolutionService.processIncomingMessage(body);
 
         if (result && !result.isGroup) {
-          // Verificar se chatbot está ativo
           const botConfig = await db('chatbot_config')
             .where('is_active', true)
             .first();
@@ -303,7 +324,6 @@ router.post('/webhook', async (req, res) => {
             }
           }
 
-          // Emitir evento via Socket.io
           const io = req.app.get('io');
           if (io) {
             io.emit('new_message', {
@@ -318,7 +338,6 @@ router.post('/webhook', async (req, res) => {
         break;
       }
 
-      // ---- Status da mensagem ----
       case 'message.ack':
       case 'messages.update':
       case 'MESSAGES_UPDATE': {
@@ -332,18 +351,13 @@ router.post('/webhook', async (req, res) => {
         break;
       }
 
-      // ---- WAHA: Status da sessão ----
       case 'session.status': {
         const payload = body.payload || body.data;
         const status = payload?.status;
         console.log(`[Webhook] Sessão status: ${status}`);
-
         await db('whatsapp_instances')
           .where('instance_name', session)
-          .update({
-            status: status === 'WORKING' ? 'connected' : 'disconnected',
-            updated_at: new Date()
-          });
+          .update({ status: status === 'WORKING' ? 'connected' : 'disconnected', updated_at: new Date() });
 
         const io = req.app.get('io');
         if (io) {
@@ -355,19 +369,14 @@ router.post('/webhook', async (req, res) => {
         break;
       }
 
-      // ---- Evolution: Status da conexão (fallback) ----
       case 'connection.update':
       case 'CONNECTION_UPDATE': {
         const data = body.payload || body.data;
         const state = data?.state || data?.connection;
         console.log(`[Webhook] Conexão: ${state}`);
-
         await db('whatsapp_instances')
           .where('instance_name', session)
-          .update({
-            status: state === 'open' ? 'connected' : 'disconnected',
-            updated_at: new Date()
-          });
+          .update({ status: state === 'open' ? 'connected' : 'disconnected', updated_at: new Date() });
 
         const io = req.app.get('io');
         if (io) {
@@ -376,7 +385,6 @@ router.post('/webhook', async (req, res) => {
         break;
       }
 
-      // ---- QR Code atualizado ----
       case 'qrcode.updated':
       case 'QRCODE_UPDATED': {
         const data = body.payload || body.data;
@@ -395,6 +403,7 @@ router.post('/webhook', async (req, res) => {
     }
 
     res.status(200).json({ received: true });
+
   } catch (error) {
     console.error('[Webhook] Erro:', error.message);
     res.status(200).json({ received: true, error: error.message });
