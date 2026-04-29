@@ -471,6 +471,35 @@ class EvolutionService {
   }
 
   async processIncomingMessage(webhookData) {
+    // ── PATCH: normaliza payload Evolution API (Baileys) → formato WAHA ──
+    if (webhookData?.data?.key?.remoteJid && !webhookData.payload) {
+      const d = webhookData.data;
+      const msg = d.message || {};
+      const text = msg.conversation
+                || msg.extendedTextMessage?.text
+                || msg.imageMessage?.caption
+                || msg.videoMessage?.caption
+                || '[Mídia]';
+      webhookData = {
+        event: webhookData.event,
+        session: webhookData.instance,
+        instance: webhookData.instance,
+        payload: {
+          from: d.key.remoteJid,
+          to: d.key.remoteJid,
+          chatId: d.key.remoteJid,
+          fromMe: d.key.fromMe,
+          body: text,
+          notifyName: d.pushName,
+          pushName: d.pushName,
+          id: d.key.id,
+          _data: d
+        }
+      };
+      console.log('[Adapter] Payload Evolution normalizado para WAHA');
+    }
+    // ── /PATCH ──
+
     try {
       const payload = webhookData.payload || webhookData.data;
       if (!payload) {
