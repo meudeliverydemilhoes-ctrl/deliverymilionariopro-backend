@@ -490,6 +490,7 @@ class EvolutionService {
           chatId: d.key.remoteJid,
           fromMe: d.key.fromMe,
           body: text,
+          text: { body: text },
           notifyName: d.pushName,
           pushName: d.pushName,
           id: d.key.id,
@@ -504,7 +505,7 @@ class EvolutionService {
       const payload = webhookData.payload || webhookData.data;
       if (!payload) {
         console.log('[WAHA] Webhook sem payload, ignorando');
-        console.log('[Debug] return null #1 no processIncoming'); return null;
+        return null;
       }
 
       // Log raw webhook for debugging
@@ -526,7 +527,7 @@ class EvolutionService {
       // Skip status broadcasts
       if (rawChatId.includes('status@broadcast') || rawChatId === 'status@broadcast') {
         console.log('[WAHA] Ignorando status broadcast');
-        console.log('[Debug] return null #2 no processIncoming'); return null;
+        return null;
       }
 
       // Detect groups and broadcasts
@@ -535,7 +536,7 @@ class EvolutionService {
       // Skip group messages for now (they create noise)
       if (isGroup) {
         console.log(`[WAHA] Ignorando mensagem de grupo: ${rawChatId}`);
-        console.log('[Debug] return null #3 no processIncoming'); return null;
+        return null;
       }
 
       // Clean the phone number (strip all WhatsApp suffixes)
@@ -543,7 +544,7 @@ class EvolutionService {
 
       if (!phone) {
         console.log('[WAHA] Telefone vazio apos limpeza, ignorando');
-        console.log('[Debug] return null #4 no processIncoming'); return null;
+        return null;
       }
 
       // Extract message content
@@ -556,7 +557,7 @@ class EvolutionService {
       } else {
         const messageData = payload?.message;
         const key = payload?.key;
-        if (!key || !messageData) console.log('[Debug] return null #5 no processIncoming'); return null;
+        if (!key || !messageData) return null;
         content = messageData.conversation || messageData.extendedTextMessage?.text || messageData.imageMessage?.caption || '[Midia recebida]';
       }
 
